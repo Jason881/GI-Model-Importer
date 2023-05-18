@@ -82,7 +82,6 @@ def main():
             position_vb = ""
             texture_only = True
 
-        # Some objects do not have a separate vb1, and all the data is contained in vb0
         elif not texcoord_vbs[i]:
             position_vb = position_vbs[i]
             buffer_data, element_format = collect_buffer_data(frame_dump_folder, position_vb, ["POSITION:", "NORMAL:", "COLOR:", "TEXCOORD:", "TEXCOORD1:", "TANGENT:"])
@@ -105,15 +104,11 @@ def main():
 
             # Attempt to find the pointlist corresponding to the texture coordinate by comparing sizes
             print("Attempting to find corresponding scene object")
-            point_vb_candidates = [x for x in point_vbs if point_vbs[x]["vertex_count"] == len(texcoord)]
-            if not point_vb_candidates:
-                # If we can't find a correct pointlist, fall back to using the positional data from collect_model_data
-                print(f"WARNING: Unable to find any point vbs with length that matches texcoord ({len(texcoord)}). Defaulting to use position data from higher draw IDs")
-                print("Skipping blend data collection")
-                position_vb = position_vbs[i]
-                blend = []
-                hash_data[i]["root_vs"] = ""
-            else:
+            if point_vb_candidates := [
+                x
+                for x in point_vbs
+                if point_vbs[x]["vertex_count"] == len(texcoord)
+            ]:
                 # Otherwise, we have found at least one corresponding pointlist which we can use to collect the position data
                 # If more than one, we have no way of distinguishing so we have to ask the user
                 if len(point_vb_candidates) > 1:
@@ -121,10 +116,11 @@ def main():
                     point_vb_candidates =  [x for x in point_vbs if point_vbs[x]["draw_id"] == selection]
 
                 # Forces a specific object, sometimes there is a mismatch so this can be used for troubleshooting
-                if args.force_object:
-                    correct_vb_id = args.force_object
-                else:
-                    correct_vb_id = point_vb_candidates[0]
+                correct_vb_id = (
+                    args.force_object
+                    if args.force_object
+                    else point_vb_candidates[0]
+                )
                 print(f"Using object with ID {correct_vb_id}")
                 position_vb = point_vbs[correct_vb_id]["position_vb"]
                 blend_vb = point_vbs[correct_vb_id]["blend_vb"]
@@ -138,6 +134,13 @@ def main():
                 hash_data[i]["root_vs"] = args.vs
 
 
+            else:
+                # If we can't find a correct pointlist, fall back to using the positional data from collect_model_data
+                print(f"WARNING: Unable to find any point vbs with length that matches texcoord ({len(texcoord)}). Defaulting to use position data from higher draw IDs")
+                print("Skipping blend data collection")
+                position_vb = position_vbs[i]
+                blend = []
+                hash_data[i]["root_vs"] = ""
             # Positional data exists for both of the above cases, though the file we get the info from differs
             # Order is POSITION (R32G32B32_FLOAT), NORMAL (R32G32B32_FLOAT), TANGENT (R32G32B32A32_FLOAT)
             # Sizes are 12, 12, 16 for a total stride of 40
@@ -288,7 +291,7 @@ def collect_relevant_ids(frame_dump_folder, draw_vb_hashes):
                 # The higher ids should have all the info we need, so ignore these for now
                 if draw_id not in relevant_id_group and int(draw_id) > 10:
                     if texture_only_flag:
-                        draw_id = "x" + draw_id
+                        draw_id = f"x{draw_id}"
                     relevant_id_group.append(draw_id)
         relevant_ids.append(relevant_id_group)
         first_vss.append(first_vs)
@@ -343,11 +346,14 @@ def collect_model_data(frame_dump_folder, relevant_ids, force_ids):
             draw_ib = draw_ib[0]
 
             with open(os.path.join(frame_dump_folder, draw_ib), "r") as f:
-                first_index = -1
-                for line in f.readlines():
-                    if "first index:" in line:
-                        first_index = int(line.split(":")[1].strip())
-                        break
+                first_index = next(
+                    (
+                        int(line.split(":")[1].strip())
+                        for line in f
+                        if "first index:" in line
+                    ),
+                    -1,
+                )
                 if first_index < 0:
                     print("ERROR: Unrecognized IB format. Exiting")
                     sys.exit()
@@ -390,7 +396,12 @@ def collect_model_data(frame_dump_folder, relevant_ids, force_ids):
             # Finally, collect textures
             # The original script only used the diffuse and lightmaps, but I have extended to now look for shadow
             #   ramps and metal maps as well
-            texture_maps = [name for name in current_id_files if "-ps-t" in name and (os.path.splitext(name)[1] == ".dds" or os.path.splitext(name)[1] == ".jpg")]
+            texture_maps = [
+                name
+                for name in current_id_files
+                if "-ps-t" in name
+                and os.path.splitext(name)[1] in [".dds", ".jpg"]
+            ]
             print(f"Found texture maps: {texture_maps}")
             if len(texture_maps) < 2:
                 print(f"ERROR: Unable to find diffuse and lightmaps for {current_id}. Exiting")
@@ -406,7 +417,7 @@ def collect_model_data(frame_dump_folder, relevant_ids, force_ids):
                 model_group[first_index].append(texture_maps[3])
 
         if not model_group.keys():
-            print(f"ERROR: Unable to find any model components. Exiting")
+            print("ERROR: Unable to find any model components. Exiting")
             sys.exit()
 
         print(f"\nFound backup positional data: {position_vb}")
@@ -431,9 +442,7 @@ def collect_buffer_data(frame_dump_folder, filename, filters):
         # The .txt files do not always accurately reflect what is in the raw data, can use this to filter
         temp = []
         for line in data:
-            for filter in filters:
-                if filter in line:
-                    temp.append(line)
+            temp.extend(line for filter in filters if filter in line)
         data = temp
         vertex_group = []
         for i in range(len(data)):
@@ -457,13 +466,22 @@ def parse_buffer_headers(headers, filters):
         name = lines[0].split(": ")[1]
         index = lines[1].split(": ")[1]
         data_format = lines[2].split(": ")[1]
-        bytewidth = sum([int(x) for x in re.findall("([0-9]*)[^0-9]", data_format.split("_")[0]+"_") if x])//8
+        bytewidth = (
+            sum(
+                int(x)
+                for x in re.findall(
+                    "([0-9]*)[^0-9]", data_format.split("_")[0] + "_"
+                )
+                if x
+            )
+            // 8
+        )
 
         # A bit annoying, but names can be very similar so need to match filter format exactly
         element_name = name
         if index != "0":
             element_name += index
-        if element_name+":" not in filters:
+        if f"{element_name}:" not in filters:
             continue
 
         results.append({"semantic_name": name, "element_name": element_name, "index": index, "format": data_format, "bytewidth": bytewidth})
@@ -476,17 +494,13 @@ def construct_combined_buffer(buffer_data, element_format):
     print("\nConstructing combined buffer")
     vb_merged = ""
 
-    stride = 0
-    for element in element_format:
-        stride += element['bytewidth']
+    stride = sum(element['bytewidth'] for element in element_format)
     vb_merged += f"stride: {stride}\n"
     vb_merged += f"first vertex: 0\nvertex count: {len(buffer_data)}\ntopology: trianglelist\n"
 
-    element_offset = 0
     byte_offset = 0
-    for element in element_format:
+    for element_offset, element in enumerate(element_format):
         vb_merged += f"element[{element_offset}]:\n  SemanticName: {element['semantic_name']}\n  SemanticIndex: {element['index']}\n  Format: {element['format']}\n  InputSlot: 0\n  AlignedByteOffset: {byte_offset}\n  InputSlotClass: per-vertex\n  InstanceDataStepRate: 0\n"
-        element_offset += 1
         byte_offset += element['bytewidth']
 
     vb_merged += "\nvertex-data:\n\n"
@@ -507,14 +521,14 @@ def output_results(frame_dump_folder, character, component_names, model_data, vb
 
     print(model_data, current_part)
     sorted_indexes = sorted(model_data[current_part].keys())
-    count = 0
-    for index in sorted_indexes:
+    for count, index in enumerate(sorted_indexes):
         # Actually pretty rare to see more than three objects drawn on a single buffer, though I have seen four a few times
         # Now generalized to work with N objects, just repeats the last object with 2,3,4 etc.
-        if count+1 > len(object_classifications):
-            classification = f"{object_classifications[-1]}{count + 2 - len(object_classifications)}"
-        else:
-            classification = object_classifications[count]
+        classification = (
+            f"{object_classifications[-1]}{count + 2 - len(object_classifications)}"
+            if count + 1 > len(object_classifications)
+            else object_classifications[count]
+        )
         print(f"{classification} object at index {index}")
         print(f"Relevant files: {model_data[current_part][index]}")
 
@@ -551,7 +565,6 @@ def output_results(frame_dump_folder, character, component_names, model_data, vb
                 extension, texture_type = identify_texture(frame_dump_folder, model_data[current_part][index][4])
                 shutil.copyfile(os.path.join(frame_dump_folder, model_data[current_part][index][4]),
                                 os.path.join(character, f"{name_prefix}{texture_type}{extension}"))
-        count += 1
 
 
 # Gets the stride from the corresponding vb file

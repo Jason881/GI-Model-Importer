@@ -81,8 +81,9 @@ def make_annotations(cls):
     """Converts class fields to annotations if running with Blender 2.8"""
     if bpy.app.version < (2, 80):
         return cls
-    bl_props = {k: v for k, v in cls.__dict__.items() if isinstance(v, tuple)}
-    if bl_props:
+    if bl_props := {
+        k: v for k, v in cls.__dict__.items() if isinstance(v, tuple)
+    }:
         if '__annotations__' not in cls.__dict__:
             setattr(cls, '__annotations__', {})
         annotations = cls.__dict__['__annotations__']
@@ -93,10 +94,7 @@ def make_annotations(cls):
 
 def select_get(object):
     """Multi version compatibility for getting object selection"""
-    if hasattr(object, "select_get"):
-        return object.select_get()
-    else:
-        return object.select
+    return object.select_get() if hasattr(object, "select_get") else object.select
 
 def select_set(object, state):
     """Multi version compatibility for setting object selection"""
@@ -107,10 +105,7 @@ def select_set(object, state):
 
 def hide_get(object):
     """Multi version compatibility for getting object hidden state"""
-    if hasattr(object, "hide_get"):
-        return object.hide_get()
-    else:
-        return object.hide
+    return object.hide_get() if hasattr(object, "hide_get") else object.hide
 
 def hide_set(object, state):
     """Multi version compatibility for setting object hidden state"""
@@ -221,7 +216,7 @@ def EncoderDecoder(fmt):
         return (lambda data: numpy.around((numpy.fromiter(data, numpy.float32) * 127.0)).astype(numpy.int8).tobytes(),
                 lambda data: (numpy.frombuffer(data, numpy.int8) / 127.0).tolist())
 
-    raise Fatal('File uses an unsupported DXGI Format: %s' % fmt)
+    raise Fatal(f'File uses an unsupported DXGI Format: {fmt}')
 
 components_pattern = re.compile(r'''(?<![0-9])[0-9]+(?![0-9])''')
 def format_components(fmt):
@@ -253,15 +248,15 @@ class InputLayoutElement(object):
         self.InstanceDataStepRate = int(self.next_validate(f, 'InstanceDataStepRate'))
 
     def to_dict(self):
-        d = {}
-        d['SemanticName'] = self.SemanticName
-        d['SemanticIndex'] = self.SemanticIndex
-        d['Format'] = self.Format
-        d['InputSlot'] = self.InputSlot
-        d['AlignedByteOffset'] = self.AlignedByteOffset
-        d['InputSlotClass'] = self.InputSlotClass
-        d['InstanceDataStepRate'] = self.InstanceDataStepRate
-        return d
+        return {
+            'SemanticName': self.SemanticName,
+            'SemanticIndex': self.SemanticIndex,
+            'Format': self.Format,
+            'InputSlot': self.InputSlot,
+            'AlignedByteOffset': self.AlignedByteOffset,
+            'InputSlotClass': self.InputSlotClass,
+            'InstanceDataStepRate': self.InstanceDataStepRate,
+        }
 
     def to_string(self, indent=2):
         return textwrap.indent(textwrap.dedent('''
@@ -294,7 +289,7 @@ class InputLayoutElement(object):
     @staticmethod
     def next_validate(f, field):
         line = next(f).strip()
-        assert(line.startswith(field + ': '))
+        assert line.startswith(f'{field}: ')
         return line[len(field) + 2:]
 
     @property
@@ -427,7 +422,7 @@ class VertexBuffer(object):
             if line.startswith('topology:'):
                 self.topology = line[10:]
                 if line != 'topology: trianglelist':
-                    raise Fatal('"%s" is not yet supported' % line)
+                    raise Fatal(f'"{line}" is not yet supported')
             if line.startswith('vertex-data:'):
                 if not load_vertices:
                     return
@@ -440,10 +435,10 @@ class VertexBuffer(object):
         # f.seek(self.first * self.layout.stride, whence=1)
         self.first = 0
         while True:
-            vertex = f.read(self.layout.stride)
-            if not vertex:
+            if vertex := f.read(self.layout.stride):
+                self.vertices.append(self.layout.decode(vertex))
+            else:
                 break
-            self.vertices.append(self.layout.decode(vertex))
         # We intentionally disregard the vertex count when loading from a
         # binary file, as we assume frame analysis might have only dumped a
         # partial buffer to the .txt files (e.g. if this was from a dump where
@@ -463,8 +458,7 @@ class VertexBuffer(object):
             if line.startswith('instance-data:'):
                 break
 
-            match = self.vb_elem_pattern.match(line)
-            if match:
+            if match := self.vb_elem_pattern.match(line):
                 vertex[match.group('semantic')] = self.parse_vertex_element(match)
             elif line == '' and vertex:
                 self.vertices.append(vertex)
@@ -488,7 +482,7 @@ class VertexBuffer(object):
         for vertex in self.vertices:
             for semantic in list(vertex):
                 if semantic.startswith('BLENDINDICES'):
-                    vertex['~' + semantic] = vertex[semantic]
+                    vertex[f'~{semantic}'] = vertex[semantic]
                     vertex[semantic] = tuple(lookup_vgmap(x) for x in vertex[semantic])
 
     def revert_blendindices_remap(self):
@@ -496,8 +490,8 @@ class VertexBuffer(object):
         for vertex in self.vertices:
             for semantic in list(vertex):
                 if semantic.startswith('BLENDINDICES'):
-                    vertex[semantic] = vertex['~' + semantic]
-                    del vertex['~' + semantic]
+                    vertex[semantic] = vertex[f'~{semantic}']
+                    del vertex[f'~{semantic}']
 
     def disable_blendweights(self):
         for vertex in self.vertices:
@@ -530,7 +524,7 @@ class VertexBuffer(object):
         assert(len(self.vertices) == self.vertex_count)
 
     def wipe_semantic_for_testing(self, semantic, val=0):
-        print('WARNING: WIPING %s FOR TESTING PURPOSES!!!' % semantic)
+        print(f'WARNING: WIPING {semantic} FOR TESTING PURPOSES!!!')
         semantic, _, components = semantic.partition('.')
         if components:
             components = [{'x':0, 'y':1, 'z':2, 'w':3}[c] for c in components]
@@ -577,7 +571,7 @@ class IndexBuffer(object):
             elif line.startswith('topology:'):
                 self.topology = line[10:]
                 if line != 'topology: trianglelist':
-                    raise Fatal('"%s" is not yet supported' % line)
+                    raise Fatal(f'"{line}" is not yet supported')
             elif line.startswith('format:'):
                 self.format = line[8:]
             elif line == '':
@@ -750,16 +744,16 @@ def import_uv_layers(mesh, obj, texcoords, flip_texcoord_v):
         # but for now I'm thinking that splitting the TEXCOORD into two sets of
         # UV coordinates might work:
         dim = len(data[0])
-        if dim == 4:
-            components_list = ('xy', 'zw')
-        elif dim == 2:
+        if dim == 2:
             components_list = ('xy',)
+        elif dim == 4:
+            components_list = ('xy', 'zw')
         else:
             raise Fatal('Unhandled TEXCOORD dimension: %i' % dim)
         cmap = {'x': 0, 'y': 1, 'z': 2, 'w': 3}
 
         for components in components_list:
-            uv_name = 'TEXCOORD%s.%s' % (texcoord and texcoord or '', components)
+            uv_name = f"TEXCOORD{texcoord and texcoord or ''}.{components}"
             if hasattr(mesh, 'uv_textures'): # 2.79
                 mesh.uv_textures.new(uv_name)
             else: # 2.80
@@ -783,7 +777,7 @@ def import_uv_layers(mesh, obj, texcoords, flip_texcoord_v):
             if flip_texcoord_v:
                 flip_uv = lambda uv: (uv[0], 1.0 - uv[1])
                 # Record that V was flipped so we know to undo it when exporting:
-                obj['3DMigoto:' + uv_name] = {'flip_v': True}
+                obj[f'3DMigoto:{uv_name}'] = {'flip_v': True}
             else:
                 flip_uv = lambda uv: uv
 
@@ -799,7 +793,7 @@ def import_vertex_layers(mesh, obj, vertex_layers):
         for component in range(dim):
 
             if dim != 1 or element_name.find('.') == -1:
-                layer_name = '%s.%s' % (element_name, cmap[component])
+                layer_name = f'{element_name}.{cmap[component]}'
             else:
                 layer_name = element_name
 
@@ -821,7 +815,7 @@ def import_vertex_layers(mesh, obj, vertex_layers):
                 for v in mesh.vertices:
                     layer.data[v.index].value = data[v.index][component]
             else:
-                raise Fatal('BUG: Bad layer type %s' % type(data[0][0]))
+                raise Fatal(f'BUG: Bad layer type {type(data[0][0])}')
 
 def import_faces_from_ib(mesh, ib):
     mesh.loops.add(len(ib.faces) * 3)
@@ -835,7 +829,7 @@ def import_faces_from_vb(mesh, vb):
     num_faces = len(vb.vertices) // 3
     mesh.loops.add(num_faces * 3)
     mesh.polygons.add(num_faces)
-    mesh.loops.foreach_set('vertex_index', [x for x in range(num_faces * 3)])
+    mesh.loops.foreach_set('vertex_index', list(range(num_faces * 3)))
     mesh.polygons.foreach_set('loop_start', [x*3 for x in range(num_faces)])
     mesh.polygons.foreach_set('loop_total', [3] * num_faces)
 
@@ -884,10 +878,6 @@ def import_vertices(mesh, vb):
                     # (i.e. divide XYZ by W), but that might be assuming too
                     # much for a generic script.
                     raise Fatal('Positions are 4D')
-                    # Occurs in some meshes in DOA6, such as skirts.
-                    # W coordinate must be preserved in these cases.
-                    print('Positions are 4D, storing W coordinate in POSITION.w vertex layer')
-                    vertex_layers['POSITION.w'] = [[x[3]] for x in data]
             positions = [(x[0], x[1], x[2]) for x in data]
             mesh.vertices.foreach_set('co', unpack_list(positions))
         elif translated_elem_name.startswith('COLOR'):
@@ -900,10 +890,10 @@ def import_vertices(mesh, vb):
                 for l in mesh.loops:
                     color_layer[l.index].color = list(data[l.vertex_index]) + [0]*(c-len(data[l.vertex_index]))
             else:
-                mesh.vertex_colors.new(name=elem.name + '.RGB')
-                mesh.vertex_colors.new(name=elem.name + '.A')
-                color_layer = mesh.vertex_colors[elem.name + '.RGB'].data
-                alpha_layer = mesh.vertex_colors[elem.name + '.A'].data
+                mesh.vertex_colors.new(name=f'{elem.name}.RGB')
+                mesh.vertex_colors.new(name=f'{elem.name}.A')
+                color_layer = mesh.vertex_colors[f'{elem.name}.RGB'].data
+                alpha_layer = mesh.vertex_colors[f'{elem.name}.A'].data
                 for l in mesh.loops:
                     color_layer[l.index].color = data[l.vertex_index][:3]
                     alpha_layer[l.index].color = [data[l.vertex_index][3], 0, 0]
@@ -916,7 +906,9 @@ def import_vertices(mesh, vb):
         #    for l in mesh.loops:
         #        assert(data[l.vertex_index][3] in (1.0, -1.0))
         #        l.tangent[:] = data[l.vertex_index][0:3]
-            print('NOTICE: Skipping import of %s in favour of recalculating on export' % elem.name)
+            print(
+                f'NOTICE: Skipping import of {elem.name} in favour of recalculating on export'
+            )
         elif translated_elem_name.startswith('BLENDINDICES'):
             blend_indices[elem.SemanticIndex] = data
         elif translated_elem_name.startswith('BLENDWEIGHT'):
@@ -924,7 +916,9 @@ def import_vertices(mesh, vb):
         elif translated_elem_name.startswith('TEXCOORD') and elem.is_float():
             texcoords[elem.SemanticIndex] = data
         else:
-            print('NOTICE: Storing unhandled semantic %s %s as vertex layer' % (elem.name, elem.Format))
+            print(
+                f'NOTICE: Storing unhandled semantic {elem.name} {elem.Format} as vertex layer'
+            )
             vertex_layers[elem.name] = data
 
     return (blend_indices, blend_weights, texcoords, vertex_layers, use_normals)
@@ -932,15 +926,14 @@ def import_vertices(mesh, vb):
 def import_3dmigoto(operator, context, paths, merge_meshes=True, **kwargs):
     if merge_meshes:
         return import_3dmigoto_vb_ib(operator, context, paths, **kwargs)
-    else:
-        obj = []
-        for p in paths:
-            try:
-                obj.append(import_3dmigoto_vb_ib(operator, context, [p], **kwargs))
-            except Fatal as e:
-                operator.report({'ERROR'}, str(e) + ': ' + str(p[:2]))
-        # FIXME: Group objects together
-        return obj
+    obj = []
+    for p in paths:
+        try:
+            obj.append(import_3dmigoto_vb_ib(operator, context, [p], **kwargs))
+        except Fatal as e:
+            operator.report({'ERROR'}, f'{str(e)}: {str(p[:2])}')
+    # FIXME: Group objects together
+    return obj
 
 def import_3dmigoto_vb_ib(operator, context, paths, flip_texcoord_v=True, axis_forward='-Z', axis_up='Y', pose_cb_off=[0,0], pose_cb_step=1):
     vb, ib, name, pose_path = load_3dmigoto_mesh(operator, paths)
@@ -1032,8 +1025,15 @@ def blender_vertex_to_3dmigoto_vertex(mesh, obj, blender_loop_vertex, layout, te
             if elem.name in mesh.vertex_colors:
                 vertex[elem.name] = elem.clip(list(mesh.vertex_colors[elem.name].data[blender_loop_vertex.index].color))
             else:
-                vertex[elem.name] = list(mesh.vertex_colors[elem.name+'.RGB'].data[blender_loop_vertex.index].color)[:3] + \
-                                        [mesh.vertex_colors[elem.name+'.A'].data[blender_loop_vertex.index].color[0]]
+                vertex[elem.name] = list(
+                    mesh.vertex_colors[f'{elem.name}.RGB']
+                    .data[blender_loop_vertex.index]
+                    .color
+                )[:3] + [
+                    mesh.vertex_colors[f'{elem.name}.A']
+                    .data[blender_loop_vertex.index]
+                    .color[0]
+                ]
         elif elem.name == 'NORMAL':
             vertex[elem.name] = elem.pad(list(blender_loop_vertex.normal), 0.0)
         elif elem.name.startswith('TANGENT'):
@@ -1065,7 +1065,7 @@ def blender_vertex_to_3dmigoto_vertex(mesh, obj, blender_loop_vertex, layout, te
         elif elem.name.startswith('TEXCOORD') and elem.is_float():
             # FIXME: Handle texcoords of other dimensions
             uvs = []
-            for uv_name in ('%s.xy' % elem.name, '%s.zw' % elem.name):
+            for uv_name in (f'{elem.name}.xy', f'{elem.name}.zw'):
                 if uv_name in texcoords:
                     uvs += list(texcoords[uv_name][blender_loop_vertex.index])
             vertex[elem.name] = uvs
@@ -1073,7 +1073,7 @@ def blender_vertex_to_3dmigoto_vertex(mesh, obj, blender_loop_vertex, layout, te
             # Unhandled semantics are saved in vertex layers
             data = []
             for component in 'xyzw':
-                layer_name = '%s.%s' % (elem.name, component)
+                layer_name = f'{elem.name}.{component}'
                 if layer_name in mesh.vertex_layers_int:
                     data.append(mesh.vertex_layers_int[layer_name].data[blender_loop_vertex.vertex_index].value)
                 elif layer_name in mesh.vertex_layers_float:
@@ -1083,9 +1083,9 @@ def blender_vertex_to_3dmigoto_vertex(mesh, obj, blender_loop_vertex, layout, te
                 vertex[elem.name] = data
 
         if elem.name not in vertex:
-            print('NOTICE: Unhandled vertex element: %s' % elem.name)
-        #else:
-        #    print('%s: %s' % (elem.name, repr(vertex[elem.name])))
+            print(f'NOTICE: Unhandled vertex element: {elem.name}')
+            #else:
+            #    print('%s: %s' % (elem.name, repr(vertex[elem.name])))
 
     return vertex
 
@@ -1129,7 +1129,7 @@ def export_3dmigoto(operator, context, vb_path, ib_path, fmt_path):
         texcoords = {}
 
         try:
-            flip_texcoord_v = obj['3DMigoto:' + uv_layer.name]['flip_v']
+            flip_texcoord_v = obj[f'3DMigoto:{uv_layer.name}']['flip_v']
             if flip_texcoord_v:
                 flip_uv = lambda uv: (uv[0], 1.0 - uv[1])
             else:
@@ -1171,9 +1171,9 @@ def export_3dmigoto(operator, context, vb_path, ib_path, fmt_path):
     for (suffix, vgmap) in vgmaps.items():
         path = vb_path
         if suffix:
-            path = '%s-%s%s' % (base, suffix, ext)
-        vgmap_path = os.path.splitext(path)[0] + '.vgmap'
-        print('Exporting %s...' % path)
+            path = f'{base}-{suffix}{ext}'
+        vgmap_path = f'{os.path.splitext(path)[0]}.vgmap'
+        print(f'Exporting {path}...')
         vb.remap_blendindices(obj, vgmap)
         vb.write(open(path, 'wb'), operator=operator)
         vb.revert_blendindices_remap()
